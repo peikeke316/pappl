@@ -1,0 +1,89 @@
+name: Build Win64 DLL
+
+# 触发条件：推送到任意分支、PR、或手动触发
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows-dll:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout PAPPL sources
+      uses: actions/checkout@v4
+
+    - name: Setup msbuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Restore NuGet packages
+      shell: cmd
+      run: |
+        cd vcnet
+        nuget restore pappl.sln
+        echo === NuGet packages folder ===
+        dir packages /B
+
+    - name: Build Release|x64
+      shell: cmd
+      run: |
+        cd vcnet
+        msbuild pappl.sln /p:Configuration=Release /p:Platform=x64 /t:libpappl2 /m /v:normal /bl
+
+    - name: Verify build outputs exist
+      shell: cmd
+      run: |
+        echo === vcnet\x64\Release contents ===
+        dir vcnet\x64\Release /B
+        if not exist vcnet\x64\Release\libpappl2.dll (
+          echo ERROR: libpappl2.dll not found, build likely failed
+          exit /b 1
+        )
+
+    - name: Collect DLLs and libs
+      shell: cmd
+      run: |
+        if not exist artifact mkdir artifact
+        rem 主产物
+        copy /Y vcnet\x64\Release\libpappl2.dll artifact\
+        copy /Y vcnet\x64\Release\libpappl2.lib artifact\
+        copy /Y vcnet\x64\Release\libpappl2.pdb artifact\
+        rem 依赖 DLL（libcups3 / libjpeg-turbo / libpng / libressl / zlib）
+        cd vcnet
+        call copy-dlls.bat x64\Release
+        cd ..
+        copy /Y vcnet\x64\Release\*.dll artifact\
+        rem 头文件（方便 Delphi 调用时查阅）
+        if not exist artifact\include mkdir artifact\include
+        copy /Y pappl\pappl.h artifact\include\
+        copy /Y pappl\base.h artifact\include\
+        copy /Y pappl\client.h artifact\include\
+        copy /Y pappl\printer.h artifact\include\
+        copy /Y pappl\job.h artifact\include\
+        copy /Y pappl\system.h artifact\include\
+        copy /Y pappl\device.h artifact\include\
+        copy /Y pappl\log.h artifact\include\
+        copy /Y pappl\loc.h artifact\include\
+        copy /Y pappl\mainloop.h artifact\include\
+        rem 列出最终 artifact 内容便于确认
+        echo === artifact contents ===
+        dir artifact /B /S
+
+    - name: Upload msbuild binlog on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: msbuild-binlog
+        path: vcnet\msbuild.binlog
+        if-no-files-found: ignore
+
+    - name: Upload libpappl2 artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: libpappl2-win64-release
+        path: artifact\
+        retention-days: 30
+        if-no-files-found: error
